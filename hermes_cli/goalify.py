@@ -28,10 +28,18 @@ VAGUE_WORDS = (
     "fast",
     "feels right",
     "clean",
+    "clean up",
+    "make it better",
+    "better",
     "done properly",
+    "properly",
     "great ux",
     "better ux",
     "polished",
+    "modern",
+    "production ready",
+    "robust",
+    "scale",
 )
 
 FIELD_NAMES = {
@@ -76,6 +84,146 @@ TEMPLATE_FIELDS = [
     "CRITERION_3",
 ]
 
+DEFAULT_MODE_CATALOG: Dict[str, Dict[str, Any]] = {
+    "ideation/interrogation": {
+        "triggers": ["idea", "interrogate", "fuzzy", "vague", "brainstorm", "what if", "explore", "discover"],
+        "priority": 10,
+        "required_preflight": [
+            "Translate every vague noun into a concrete artifact before planning or building.",
+            "Surface problem, target user or integration surface, measurable success criteria, scope, non-goals, edge cases, failure modes, and regulatory/data-handling exposure.",
+        ],
+        "stop_rules": [
+            "Do not write code, docs, or implementation plans during the interview phase.",
+            "Halt when answering would require inventing scope, audience, or success criteria.",
+        ],
+        "verification": [
+            "Re-read the final brief against the done-when checklist before locking.",
+            "Confirm assumptions explicitly or leave them marked as awaiting confirmation.",
+        ],
+        "deep_question": "What concrete problem are we solving, for whom or what integration surface, and how will we measure success?",
+    },
+    "planning/documentation": {
+        "triggers": ["plan", "planning", "docs", "documentation", "roadmap", "architecture doc", "brief", "prd", "decision"],
+        "priority": 20,
+        "required_preflight": [
+            "Confirm the doc convention or recommend one sized to the project scale.",
+            "Create roadmap, decisions, risks, and backward docs only when extending existing systems.",
+        ],
+        "stop_rules": [
+            "Halt when the brief is missing required information.",
+            "Do not invent filenames, decisions, milestones, responsibilities, or scope.",
+        ],
+        "verification": [
+            "Walk every implementation step and confirm its decision references exist.",
+            "Validate architecture diagrams against the actual dependency graph when extending code.",
+        ],
+    },
+    "build/implementation": {
+        "triggers": ["build", "implement", "ship", "create", "add", "feature", "complete", "execute"],
+        "priority": 30,
+        "required_preflight": [
+            "Read roadmap, decisions, and risks docs before writing code when they exist.",
+            "Restate milestones, exit criteria, and ownership boundaries before implementation.",
+        ],
+        "stop_rules": [
+            "Do not invent architecture or decisions absent from the planning docs without surfacing the gap.",
+            "Do not skip milestones or defer test coverage to the end.",
+        ],
+        "verification": [
+            "Run the full system end-to-end when possible.",
+            "Run tests covering every milestone's exit criteria and update decisions/risks for deviations.",
+        ],
+    },
+    "refactoring/restructuring": {
+        "triggers": ["refactor", "restructure", "rename", "move logic", "split module", "zero behavior", "behavior change", "clean up"],
+        "priority": 40,
+        "required_preflight": [
+            "Map affected call graph and public API surface before touching code.",
+            "Run pre/post tests that can detect behavior changes.",
+        ],
+        "stop_rules": [
+            "Preserve behavior; do not co-mingle behavior changes with structural changes.",
+            "Halt if the test suite is absent or insufficient to detect behavior change unless the user explicitly accepts that risk.",
+        ],
+        "verification": [
+            "Run pre/post tests, lint, typecheck, and build for the affected scope.",
+            "Confirm breaking API changes are explicitly flagged and approved.",
+        ],
+    },
+    "consolidation": {
+        "triggers": ["consolidate", "collapse", "duplicate", "parallel implementation", "canonical", "merge duplicate", "single implementation", "one canonical"],
+        "priority": 50,
+        "required_preflight": [
+            "Inventory every parallel implementation and caller before choosing the canonical path.",
+            "Compare behavior, edge cases, caller dependencies, and ownership boundaries.",
+        ],
+        "stop_rules": [
+            "Do not delete non-canonical implementations until all callers are migrated and verified.",
+            "Halt when behavior divergences require a product decision.",
+        ],
+        "verification": [
+            "Run tests after each caller migration.",
+            "Confirm deleted implementations have no remaining references via symbol/content search.",
+        ],
+    },
+    "hardening": {
+        "triggers": ["harden", "hardening", "production ready", "coverage", "security", "ci", "pin", "supply chain", "cve", "regression", "guardrail", "unpinned", "floating"],
+        "priority": 60,
+        "required_preflight": [
+            "Inventory current coverage, CI, security, or dependency gaps in scope.",
+            "Classify each gap by blast radius and close highest-risk gaps first.",
+        ],
+        "stop_rules": [
+            "Every fix includes a regression-preventing guardrail in the same change.",
+            "Do not land a fix without proving the guardrail catches the original gap when possible.",
+        ],
+        "verification": [
+            "Run guardrails against pre-fix and post-fix states when possible.",
+            "Confirm no floating tags or unpinned dependencies remain in the hardened scope.",
+        ],
+    },
+    "migration": {
+        "triggers": ["migrate", "migration", "upgrade", "schema", "data migration", "cutover", "rollback", "dual-write", "dual-read", "canary", "blue-green", "sdk"],
+        "priority": 70,
+        "required_preflight": [
+            "Map every consumer of the thing being migrated.",
+            "Define cutover strategy, observation window, and rollback SLA before the first migration step.",
+        ],
+        "stop_rules": [
+            "No big-bang cutovers; prefer dual-write, dual-read, feature flag, canary, or blue-green paths.",
+            "Do not remove the old path until the observation window passes and parity is confirmed.",
+        ],
+        "verification": [
+            "Tested rollback path exists at every step.",
+            "For data/schema work, test up and down migrations plus row counts, checksums, encoding, timezones, and referential integrity where applicable.",
+        ],
+    },
+}
+
+
+@dataclass
+class ModeScan:
+    primary: str = "build/implementation"
+    secondary: List[str] = field(default_factory=list)
+    confidence: str = "low"
+    reasons: Dict[str, List[str]] = field(default_factory=dict)
+    deep: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "ModeScan":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            primary=str(data.get("primary") or "build/implementation"),
+            secondary=[str(x) for x in (data.get("secondary") or [])],
+            confidence=str(data.get("confidence") or "low"),
+            reasons={str(k): [str(v) for v in vals] for k, vals in (data.get("reasons") or {}).items()},
+            deep=bool(data.get("deep") or False),
+        )
+
 
 @dataclass
 class GoalifyResult:
@@ -91,6 +239,7 @@ class GoalifyState:
     cwd: str = ""
     fields: Dict[str, str] = field(default_factory=dict)
     sources: Dict[str, str] = field(default_factory=dict)
+    mode_scan: ModeScan = field(default_factory=ModeScan)
     status: str = "clarifying"  # clarifying | proposed
     rendered_prompt: str = ""
     created_at: float = 0.0
@@ -98,7 +247,9 @@ class GoalifyState:
     clarify_turns: int = 0
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False)
+        data = asdict(self)
+        data["mode_scan"] = self.mode_scan.to_dict()
+        return json.dumps(data, ensure_ascii=False)
 
     @classmethod
     def from_json(cls, raw: str) -> "GoalifyState":
@@ -109,6 +260,7 @@ class GoalifyState:
             cwd=str(data.get("cwd") or ""),
             fields={str(k): str(v) for k, v in (data.get("fields") or {}).items()},
             sources={str(k): str(v) for k, v in (data.get("sources") or {}).items()},
+            mode_scan=ModeScan.from_dict(data.get("mode_scan")),
             status=str(data.get("status") or "clarifying"),
             rendered_prompt=str(data.get("rendered_prompt") or ""),
             created_at=float(data.get("created_at") or 0.0),
@@ -125,6 +277,79 @@ def goalify_home() -> Path:
     except Exception:  # pragma: no cover
         root = Path.home() / ".hermes"
     return root / "goalify"
+
+
+def ensure_modes_config() -> Path:
+    """Write the editable seven-mode Goalify catalog if it is missing."""
+    home = goalify_home()
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "modes.yml"
+    if yaml is not None and not path.exists():
+        path.write_text(
+            yaml.safe_dump({"modes": DEFAULT_MODE_CATALOG}, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+    return path
+
+
+def load_mode_catalog() -> Dict[str, Dict[str, Any]]:
+    ensure_modes_config()
+    path = goalify_home() / "modes.yml"
+    if yaml is None or not path.exists():
+        return DEFAULT_MODE_CATALOG
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return DEFAULT_MODE_CATALOG
+    modes = data.get("modes") if isinstance(data, dict) else None
+    if not isinstance(modes, dict):
+        return DEFAULT_MODE_CATALOG
+    merged = {name: dict(spec) for name, spec in DEFAULT_MODE_CATALOG.items()}
+    for name, spec in modes.items():
+        if isinstance(spec, dict):
+            merged[str(name)] = spec
+    return merged
+
+
+def _strip_goalify_flags(raw: str) -> Tuple[str, bool]:
+    text = (raw or "").strip()
+    deep = False
+    while True:
+        m = re.match(r"^--(deep|interrogate|strict)\b\s*", text, flags=re.I)
+        if not m:
+            break
+        deep = True
+        text = text[m.end():].strip()
+    return text, deep
+
+
+def scan_modes(raw: str, *, deep: bool = False) -> ModeScan:
+    catalog = load_mode_catalog()
+    text = (raw or "").lower()
+    scored: List[Tuple[int, int, str, List[str]]] = []
+    for name, spec in catalog.items():
+        matches: List[str] = []
+        for trigger in spec.get("triggers") or []:
+            trigger_s = str(trigger).lower().strip()
+            if not trigger_s:
+                continue
+            if re.search(r"\b" + re.escape(trigger_s) + r"\b", text):
+                matches.append(trigger_s)
+        if matches:
+            scored.append((len(matches), int(spec.get("priority") or 0), str(name), matches))
+    if not scored:
+        primary = "ideation/interrogation" if deep else "build/implementation"
+        return ModeScan(primary=primary, secondary=[], confidence="low", reasons={}, deep=deep)
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    primary = scored[0][2]
+    secondary = [name for _, _, name, _ in scored[1:3] if name != primary]
+    confidence = "high" if scored[0][0] >= 2 else "medium"
+    reasons = {name: matches for _, _, name, matches in scored[:3]}
+    return ModeScan(primary=primary, secondary=secondary, confidence=confidence, reasons=reasons, deep=deep)
+
+
+def _mode_spec(name: str) -> Dict[str, Any]:
+    return load_mode_catalog().get(name) or DEFAULT_MODE_CATALOG.get(name) or {}
 
 
 def _meta_key(session_id: str) -> str:
@@ -235,10 +460,11 @@ def _is_measurable(text: str) -> bool:
         r"\b(pass|passes|passed|exit[s]? 0|returns?\s+\d{3}|status\s*ok|200|201|204)\b",
         r"\b(get|post|put|delete|patch)\s+/[\w/{}.-]+",
         r"\b(pytest|npm|pnpm|yarn|ruff|mypy|make|cargo|go test)\b",
-        r"\b(file|artifact|row|count|table|url|screenshot|docs?/|readme|changelog)\b",
+        r"\b(file|artifact|row|count|table|url|screenshot|docs?/|readme|changelog|instructions?)\b",
+        r"\b(imports?\s+still\s+work|callers?\s+use|wrappers?\s+are\s+deleted|deleted)\b",
+        r"\b(no|zero)\s+(errors?|failures?|unrelated files?|files? outside|unpinned|floating|feature changes?)\b",
         r"(<|>|<=|>=|=)\s*\d+",
         r"\b\d+(?:\.\d+)?\s*(ms|s|sec|seconds|%|kb|mb|gb)\b",
-        r"\b(no|zero)\s+(errors?|failures?|unrelated files?|files? outside)\b",
     ]
     return any(re.search(pattern, s) for pattern in measurable_patterns)
 
@@ -376,8 +602,44 @@ def _proposal_fill(fields: Dict[str, str], cwd: str) -> Dict[str, str]:
     return filled
 
 
-def render_prompt(fields: Dict[str, str], cwd: str = "") -> str:
+def _numbered(items: List[str], *, start: int = 1) -> str:
+    return "\n".join(f"{idx}. {item}" for idx, item in enumerate(items, start=start))
+
+
+def render_mode_contract(scan: ModeScan) -> str:
+    primary_spec = _mode_spec(scan.primary)
+    secondary_specs = [(name, _mode_spec(name)) for name in scan.secondary]
+    reasons = []
+    for name, matched in scan.reasons.items():
+        if matched:
+            reasons.append(f"{name}: {', '.join(matched)}")
+    preflight = list(primary_spec.get("required_preflight") or [])
+    stop_rules = list(primary_spec.get("stop_rules") or [])
+    verification = list(primary_spec.get("verification") or [])
+    for _, spec in secondary_specs:
+        preflight.extend(str(x) for x in (spec.get("required_preflight") or [])[:1])
+        stop_rules.extend(str(x) for x in (spec.get("stop_rules") or [])[:1])
+        verification.extend(str(x) for x in (spec.get("verification") or [])[:1])
+    secondary = ", ".join(scan.secondary) if scan.secondary else "none"
+    reason_line = "; ".join(reasons) if reasons else "fallback default"
+    return "\n".join([
+        "— MODE CONTRACT —",
+        f"· Primary mode: {scan.primary}",
+        f"· Secondary modes: {secondary}",
+        f"· Confidence: {scan.confidence}",
+        f"· Why: {reason_line}",
+        "· Required preflight:",
+        _numbered(preflight or ["Inspect current state and restate assumptions before acting."]),
+        "· Stop rules:",
+        _numbered(stop_rules or ["Halt when scope, ownership, safety, or verification cannot be resolved without user input."]),
+        "· Verification pack:",
+        _numbered(verification or ["Run the relevant tests/checks and show proof before stopping."]),
+    ])
+
+
+def render_prompt(fields: Dict[str, str], cwd: str = "", mode_scan: Optional[ModeScan] = None) -> str:
     f = _proposal_fill(fields, cwd)
+    scan = mode_scan or scan_modes(" ".join(str(v) for v in f.values()))
     outcome = _clean_one_line(f.get("FINAL_OUTCOME") or "Complete the requested goal")
     return f"""/goal {outcome}
 — CONTEXT —
@@ -387,6 +649,7 @@ def render_prompt(fields: Dict[str, str], cwd: str = "") -> str:
 · Working dir: {f.get('WORKING_DIR', '')}
 · Constraints: {f.get('CONSTRAINTS', '')}
 · Audience: {f.get('AUDIENCE', '')}
+{render_mode_contract(scan)}
 — SUCCESS CRITERIA (ALL MUST BE TRUE) —
 1. {f.get('CRITERION_1', '')}
 2. {f.get('CRITERION_2', '')}
@@ -422,7 +685,7 @@ until done or genuinely blocked."""
 
 
 def render_proposal(state: GoalifyState) -> str:
-    prompt = render_prompt(state.fields, state.cwd)
+    prompt = render_prompt(state.fields, state.cwd, state.mode_scan)
     state.rendered_prompt = prompt
     lines = ["Goalify proposal:", "", "```", prompt, "```", "", "Field sources:"]
     for field in TEMPLATE_FIELDS:
@@ -433,6 +696,23 @@ def render_proposal(state: GoalifyState) -> str:
         "Natural language works too: 'yes go ahead', 'change the audience to product engineers', or 'cancel this'.",
     ])
     return "\n".join(lines)
+
+
+def render_deep_clarify(scan: ModeScan, gaps: List[str]) -> str:
+    spec = _mode_spec(scan.primary)
+    question = str(spec.get("deep_question") or "What concrete outcome should this become, and how will we verify it without taste judgment?")
+    if "FINAL_OUTCOME" in gaps:
+        question = "What concrete outcome should this become, in one sentence?"
+    elif any(g.startswith("CRITERION_") for g in gaps):
+        question = "What measurable success signal proves this is done?"
+    elif "CURRENT_STATE" in gaps:
+        question = "What is the current state or failure mode Hermes should start from?"
+    return (
+        "Deep Goalify interview: strict mode is on, so I will ask one question per turn and will not produce "
+        "a lockable /goal until the required brief is concrete.\n\n"
+        f"Mode scan: primary={scan.primary}; secondary={', '.join(scan.secondary) if scan.secondary else 'none'}; confidence={scan.confidence}.\n\n"
+        f"1. {question}"
+    )
 
 
 def render_clarify(raw: str, fields: Dict[str, str], gaps: List[str]) -> str:
@@ -515,6 +795,7 @@ def _append_audit(state: GoalifyState, outcome: str) -> None:
         "session_id": state.session_id,
         "raw_input": state.raw_input,
         "locked_prompt": state.rendered_prompt,
+        "mode_scan": state.mode_scan.to_dict(),
         "outcome": outcome,
     }
     with (home / "runs.jsonl").open("a", encoding="utf-8") as fh:
@@ -526,6 +807,8 @@ class GoalifyManager:
         self.session_id = session_id
 
     def start(self, raw_input: str, *, cwd: str = "") -> GoalifyResult:
+        raw_input, deep = _strip_goalify_flags(raw_input)
+        mode_scan = scan_modes(raw_input, deep=deep)
         raw_fields, raw_sources = parse_raw_input(raw_input, cwd)
         fields, sources = apply_defaults(raw_fields, raw_sources, cwd)
         now = time.time()
@@ -535,6 +818,7 @@ class GoalifyManager:
             cwd=cwd,
             fields=fields,
             sources=sources,
+            mode_scan=mode_scan,
             created_at=now,
             updated_at=now,
         )
@@ -542,9 +826,11 @@ class GoalifyManager:
         if gaps:
             state.status = "clarifying"
             save_pending(state)
+            if mode_scan.deep:
+                return GoalifyResult("clarify", render_deep_clarify(mode_scan, gaps))
             return GoalifyResult("clarify", render_clarify(raw_input, fields, gaps))
         state.status = "proposed"
-        state.rendered_prompt = render_prompt(fields, cwd)
+        state.rendered_prompt = render_prompt(fields, cwd, mode_scan)
         save_pending(state)
         return GoalifyResult("propose", render_proposal(state))
 
@@ -561,11 +847,11 @@ class GoalifyManager:
             state.fields[field] = value
             state.sources[field] = "user"
             state.status = "proposed"
-            state.rendered_prompt = render_prompt(state.fields, state.cwd)
+            state.rendered_prompt = render_prompt(state.fields, state.cwd, state.mode_scan)
             save_pending(state)
             return GoalifyResult("propose", render_proposal(state))
         if state.status == "proposed" and _is_yes(text):
-            state.rendered_prompt = state.rendered_prompt or render_prompt(state.fields, state.cwd)
+            state.rendered_prompt = state.rendered_prompt or render_prompt(state.fields, state.cwd, state.mode_scan)
             _append_audit(state, "locked")
             clear_pending(self.session_id)
             return GoalifyResult(
@@ -600,11 +886,14 @@ class GoalifyManager:
         state.sources = sources
         state.clarify_turns += 1
         gaps = gaps_for(fields)
+        state.mode_scan = scan_modes(state.raw_input, deep=state.mode_scan.deep)
         if gaps:
             save_pending(state)
+            if state.mode_scan.deep:
+                return GoalifyResult("clarify", render_deep_clarify(state.mode_scan, gaps))
             return GoalifyResult("clarify", render_clarify(combined, fields, gaps))
         state.status = "proposed"
-        state.rendered_prompt = render_prompt(fields, state.cwd)
+        state.rendered_prompt = render_prompt(fields, state.cwd, state.mode_scan)
         save_pending(state)
         return GoalifyResult("propose", render_proposal(state))
 
@@ -612,6 +901,7 @@ class GoalifyManager:
 def ensure_report() -> Path:
     home = goalify_home()
     home.mkdir(parents=True, exist_ok=True)
+    ensure_modes_config()
     path = home / "goalify-hermes-report.md"
     if not path.exists():
         path.write_text(
@@ -619,12 +909,18 @@ def ensure_report() -> Path:
             "Goalify is installed as a Hermes-native wrapper around `/goal`.\n\n"
             "## Paths\n"
             "- Config/defaults: `~/.hermes/goalify/defaults.yml`\n"
+            "- Seven-mode catalog: `~/.hermes/goalify/modes.yml`\n"
             "- Audit trail: `~/.hermes/goalify/runs.jsonl`\n"
             "- Pending state: Hermes SessionDB state_meta key `goalify:<session_id>`\n\n"
             "## Triggers\n"
             "- `/goalify <voice text>`\n"
-            "- `$goalify <voice text>` in CLI text input\n"
-            "- `goalify this: <voice text>` in CLI text input\n\n"
+            "- `/goalify --deep <voice text>` for one-question-at-a-time strict intake\n"
+            "- `$goalify <voice text>` in CLI or Discord text input\n"
+            "- `goalify this: <voice text>` in CLI or Discord text input\n\n"
+            "## Seven-mode scanner\n"
+            "Every draft is scanned against ideation/interrogation, planning/documentation, build/implementation, "
+            "refactoring/restructuring, consolidation, hardening, and migration. The selected mode contract injects "
+            "required preflight, stop rules, and verification packs into the locked `/goal`.\n\n"
             "## Reply flow\n"
             "Natural language replies are supported: `yes go ahead`, "
             "`change the audience to product engineers`, `cancel this`.\n\n"

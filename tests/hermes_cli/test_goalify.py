@@ -107,3 +107,72 @@ def test_goalify_audit_writes_on_lock(hermes_home):
     text = audit.read_text(encoding="utf-8")
     assert "sid-audit" in text
     assert "Ship health check" in text
+
+
+def test_goalify_classifies_hardening_and_migration_modes(hermes_home):
+    from hermes_cli.goalify import GoalifyManager, goalify_home
+
+    mgr = GoalifyManager("sid-modes")
+    raw = (
+        "Upgrade the Stripe SDK migration and make CI production ready. "
+        "Project is billing-api. Stack is Python. Current state is old SDK and floating GitHub actions. "
+        "Audience is maintainers. Done when pytest tests/billing passes, rollback instructions exist, "
+        "and no unpinned CI actions remain."
+    )
+    result = mgr.start(raw, cwd="/tmp/billing-api")
+
+    assert result.kind == "propose"
+    assert "— MODE CONTRACT —" in result.message
+    assert "Primary mode: migration" in result.message
+    assert "Secondary modes: hardening" in result.message
+    assert "Tested rollback path" in result.message
+    assert "Every fix includes a regression-preventing guardrail" in result.message
+    assert (goalify_home() / "modes.yml").exists()
+
+
+def test_goalify_refactor_mode_injects_behavior_preservation_stop_rules(hermes_home):
+    from hermes_cli.goalify import GoalifyManager
+
+    mgr = GoalifyManager("sid-refactor")
+    raw = (
+        "Refactor the auth module with zero behavior change. Project is auth-service. Stack is Python. "
+        "Current state is auth.py is too large. Audience is maintainers. "
+        "Done when pytest tests/auth passes, public API imports still work, and git diff has no feature changes."
+    )
+    result = mgr.start(raw, cwd="/tmp/auth-service")
+
+    assert result.kind == "propose"
+    assert "Primary mode: refactoring/restructuring" in result.message
+    assert "Preserve behavior; do not co-mingle behavior changes with structural changes." in result.message
+    assert "Run pre/post tests" in result.message
+
+
+def test_goalify_deep_ideation_asks_one_question_and_does_not_propose(hermes_home):
+    from hermes_cli.goalify import GoalifyManager
+
+    mgr = GoalifyManager("sid-deep")
+    result = mgr.start("--deep I have an idea for a modern agent dashboard", cwd="/tmp/agent-dashboard")
+
+    assert result.kind == "clarify"
+    assert "Deep Goalify interview" in result.message
+    question_lines = [line for line in result.message.splitlines() if line.strip().startswith("1.")]
+    assert len(question_lines) == 1
+    assert "problem" in question_lines[0].lower() or "success" in question_lines[0].lower()
+
+
+def test_goalify_consolidation_mode_prioritizes_caller_inventory(hermes_home):
+    from hermes_cli.goalify import GoalifyManager
+
+    mgr = GoalifyManager("sid-consolidate")
+    raw = (
+        "Consolidate the duplicate auth clients into one canonical implementation. "
+        "Project is web-app. Stack is TypeScript. Current state is three SDK wrappers. "
+        "Audience is app maintainers. Done when all callers use one client, pnpm test passes, "
+        "and the old duplicate wrappers are deleted."
+    )
+    result = mgr.start(raw, cwd="/tmp/web-app")
+
+    assert result.kind == "propose"
+    assert "Primary mode: consolidation" in result.message
+    assert "Inventory every parallel implementation and caller" in result.message
+    assert "Do not delete non-canonical implementations until all callers are migrated and verified." in result.message
