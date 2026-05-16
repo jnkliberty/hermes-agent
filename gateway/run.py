@@ -6406,6 +6406,14 @@ class GatewayRunner:
             return None
 
         # Check for commands
+        if isinstance(event.text, str):
+            _goalify_text = event.text.strip()
+            if _goalify_text.startswith("$goalify"):
+                event.text = "/goalify" + _goalify_text[len("$goalify"):]
+            elif _goalify_text.startswith("$gfy"):
+                event.text = "/gfy" + _goalify_text[len("$gfy"):]
+            elif _goalify_text.lower().startswith("goalify this:"):
+                event.text = "/goalify " + _goalify_text.split(":", 1)[1].strip()
         command = event.get_command()
 
         from hermes_cli.commands import (
@@ -6657,6 +6665,9 @@ class GatewayRunner:
         if canonical == "goal":
             return await self._handle_goal_command(event)
 
+        if canonical == "goalify":
+            return await self._handle_goalify_command(event)
+
         if canonical == "subgoal":
             return await self._handle_subgoal_command(event)
 
@@ -6801,7 +6812,13 @@ class GatewayRunner:
         
         # Pending exec approvals are handled by /approve and /deny commands above.
         # No bare text matching — "yes" in normal conversation must not trigger
-        # execution of a dangerous command.
+        # execution of a dangerous command. Goalify is the exception only when a
+        # per-session goalify draft already exists and still requires an explicit
+        # lock before it can enqueue the /goal loop.
+        if not command:
+            _goalify_followup = await self._maybe_handle_goalify_followup(event)
+            if _goalify_followup is not None:
+                return _goalify_followup
 
         if self._is_telegram_topic_root_lobby(source):
             # Debounce the lobby reminder so a user who forgets about
@@ -9653,6 +9670,85 @@ class GatewayRunner:
             return None, None
         max_turns = self._goal_max_turns_from_config()
         return GoalManager(session_id=sid, default_max_turns=max_turns), session_entry
+
+    async def _fire_goalify_locked_prompt_for_event(self, event: "MessageEvent", locked_prompt: str) -> str:
+        goal_text = (locked_prompt or "").strip()
+        if goal_text.startswith("/goal "):
+            goal_text = goal_text[len("/goal "):].strip()
+        mgr, _session_entry = self._get_goal_manager_for_event(event)
+        if mgr is None:
+            return t("gateway.goal.unavailable")
+        try:
+            state = mgr.set(goal_text)
+        except ValueError as exc:
+            return t("gateway.goal.invalid", error=str(exc))
+        adapter = self.adapters.get(event.source.platform) if event.source else None
+        _quick_key = self._session_key_for_source(event.source) if event.source else None
+        if adapter and _quick_key:
+            try:
+                kickoff_event = MessageEvent(
+                    text=state.goal,
+                    message_type=MessageType.TEXT,
+                    source=event.source,
+                    message_id=event.message_id,
+                    channel_prompt=event.channel_prompt,
+                )
+                self._enqueue_fifo(_quick_key, kickoff_event, adapter)
+            except Exception as exc:
+                logger.debug("goalify kickoff enqueue failed: %s", exc)
+        return t("gateway.goal.set", budget=state.max_turns, goal=state.goal)
+
+    async def _handle_goalify_command(self, event: "MessageEvent") -> str:
+        try:
+            from hermes_cli.goalify import GoalifyManager, clear_pending, ensure_report, load_pending
+        except Exception as exc:
+            return f"Goalify unavailable: {exc}"
+        args = (event.get_command_args() or "").strip()
+        lower = args.lower()
+        mgr, session_entry = self._get_goal_manager_for_event(event)
+        if mgr is None or session_entry is None:
+            return t("gateway.goal.unavailable")
+        sid = getattr(session_entry, "session_id", None) or ""
+        if not args or lower == "status":
+            pending = load_pending(sid)
+            if pending is None:
+                return "No pending goalify draft. Usage: /goalify <voice text>"
+            return f"Pending goalify draft ({pending.status}). Reply naturally, edit a field, or cancel."
+        if lower in {"cancel", "clear", "stop"}:
+            clear_pending(sid)
+            return "Goalify cancelled. No goal fired."
+        cwd = ""
+        try:
+            cwd = os.getcwd()
+        except Exception:
+            cwd = ""
+        result = GoalifyManager(sid).start(args, cwd=cwd)
+        ensure_report()
+        if result.kind == "execute" and result.locked_prompt:
+            kick = await self._fire_goalify_locked_prompt_for_event(event, result.locked_prompt)
+            return result.message + "\n\n" + kick
+        return result.message
+
+    async def _maybe_handle_goalify_followup(self, event: "MessageEvent") -> str | None:
+        try:
+            from hermes_cli.goalify import GoalifyManager, load_pending
+        except Exception:
+            return None
+        try:
+            _mgr, session_entry = self._get_goal_manager_for_event(event)
+        except Exception:
+            session_entry = None
+        sid = getattr(session_entry, "session_id", None) or "" if session_entry is not None else ""
+        if not sid or load_pending(sid) is None:
+            return None
+        text = (event.text or "").strip()
+        if not text:
+            return None
+        result = GoalifyManager(sid).followup(text)
+        if result.kind == "execute" and result.locked_prompt:
+            kick = await self._fire_goalify_locked_prompt_for_event(event, result.locked_prompt)
+            return result.message + "\n\n" + kick
+        return result.message
 
     async def _handle_goal_command(self, event: "MessageEvent") -> str:
         """Handle /goal for gateway platforms.

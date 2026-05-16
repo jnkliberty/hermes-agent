@@ -104,6 +104,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="<prompt>"),
     CommandDef("goal", "Set a standing goal Hermes works on across turns until achieved", "Session",
                args_hint="[text | pause | resume | clear | status]"),
+    CommandDef("goalify", "Turn rambling voice text into a locked, measurable /goal", "Session",
+               aliases=("gfy",), args_hint="<voice text | status | cancel>"),
     CommandDef("subgoal", "Add or manage extra criteria on the active goal", "Session",
                args_hint="[text | remove N | clear]"),
     CommandDef("status", "Show session info", "Session"),

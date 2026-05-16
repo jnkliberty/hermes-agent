@@ -2398,9 +2398,16 @@ def _looks_like_slash_command(text: str) -> bool:
     the two so that pasted paths are sent to the agent instead of
     triggering "Unknown command".
     """
-    if not text or not text.startswith("/"):
+    if not text:
         return False
-    first_word = text.split()[0]
+    stripped = text.strip()
+    if stripped.startswith("$goalify") or stripped.startswith("$gfy"):
+        return True
+    if stripped.lower().startswith("goalify this:"):
+        return True
+    if not stripped.startswith("/"):
+        return False
+    first_word = stripped.split()[0]
     # After stripping the leading /, a command name has no slashes.
     # A path like /Users/foo/bar.md always does.
     return "/" not in first_word[1:]
@@ -7644,6 +7651,13 @@ class HermesCLI:
         # Lowercase only for dispatch matching; preserve original case for arguments
         cmd_lower = command.lower().strip()
         cmd_original = command.strip()
+        if cmd_original.startswith("$goalify"):
+            cmd_original = "/goalify" + cmd_original[len("$goalify"):]
+        elif cmd_original.startswith("$gfy"):
+            cmd_original = "/gfy" + cmd_original[len("$gfy"):]
+        elif cmd_original.lower().startswith("goalify this:"):
+            cmd_original = "/goalify " + cmd_original.split(":", 1)[1].strip()
+        cmd_lower = cmd_original.lower().strip()
 
         # Resolve aliases via central registry so adding an alias is a one-line
         # change in hermes_cli/commands.py instead of touching every dispatch site.
@@ -7963,6 +7977,8 @@ class HermesCLI:
                 _cprint(f"  No agent running; queued as next turn: {payload[:80]}{'...' if len(payload) > 80 else ''}")
         elif canonical == "goal":
             self._handle_goal_command(cmd_original)
+        elif canonical == "goalify":
+            self._handle_goalify_command(cmd_original)
         elif canonical == "subgoal":
             self._handle_subgoal_command(cmd_original)
         elif canonical == "skin":
@@ -8497,6 +8513,74 @@ class HermesCLI:
         mgr = GoalManager(session_id=sid, default_max_turns=max_turns)
         self._goal_manager = mgr
         return mgr
+
+    def _fire_goalify_locked_prompt(self, locked_prompt: str) -> None:
+        """Hand a locked goalify prompt to the existing /goal engine."""
+        goal_text = (locked_prompt or "").strip()
+        if goal_text.startswith("/goal "):
+            goal_text = goal_text[len("/goal "):].strip()
+        mgr = self._get_goal_manager()
+        if mgr is None:
+            _cprint(f"  {_DIM}Goals unavailable (no active session).{_RST}")
+            return
+        try:
+            state = mgr.set(goal_text)
+        except ValueError as exc:
+            _cprint(f"  Invalid goal: {exc}")
+            return
+        _cprint(f"  ⊙ Goal set ({state.max_turns}-turn budget): {state.goal[:120]}{'...' if len(state.goal) > 120 else ''}")
+        try:
+            self._pending_input.put(state.goal)
+        except Exception:
+            pass
+
+    def _handle_goalify_command(self, cmd: str) -> None:
+        """Create or advance a Goalify draft from CLI text."""
+        try:
+            from hermes_cli.goalify import GoalifyManager, clear_pending, ensure_report, load_pending
+        except Exception as exc:
+            _cprint(f"  Goalify unavailable: {exc}")
+            return
+        parts = (cmd or "").strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        sid = getattr(self, "session_id", None) or ""
+        if not sid:
+            _cprint(f"  {_DIM}Goalify unavailable (no active session).{_RST}")
+            return
+        lower = arg.lower()
+        if not arg or lower == "status":
+            pending = load_pending(sid)
+            if pending is None:
+                _cprint("  No pending goalify draft. Usage: /goalify <voice text>")
+            else:
+                _cprint(f"  Pending goalify draft ({pending.status}). Reply naturally, edit a field, or cancel.")
+            return
+        if lower in {"cancel", "clear", "stop"}:
+            clear_pending(sid)
+            _cprint("  Goalify cancelled. No goal fired.")
+            return
+        result = GoalifyManager(sid).start(arg, cwd=os.getcwd())
+        ensure_report()
+        _cprint(result.message)
+        if result.kind == "execute" and result.locked_prompt:
+            self._fire_goalify_locked_prompt(result.locked_prompt)
+
+    def _maybe_handle_goalify_followup(self, text: str) -> bool:
+        """Consume natural-language replies while a goalify draft is pending."""
+        if not isinstance(text, str) or not text.strip():
+            return False
+        try:
+            from hermes_cli.goalify import GoalifyManager, load_pending
+        except Exception:
+            return False
+        sid = getattr(self, "session_id", None) or ""
+        if not sid or load_pending(sid) is None:
+            return False
+        result = GoalifyManager(sid).followup(text)
+        _cprint(result.message)
+        if result.kind == "execute" and result.locked_prompt:
+            self._fire_goalify_locked_prompt(result.locked_prompt)
+        return True
 
     def _handle_goal_command(self, cmd: str) -> None:
         """Dispatch /goal subcommands: set / status / pause / resume / clear."""
@@ -13532,6 +13616,9 @@ class HermesCLI:
                             # Schedule app exit
                             if app.is_running:
                                 app.exit()
+                        continue
+
+                    if not _file_drop and isinstance(user_input, str) and self._maybe_handle_goalify_followup(user_input):
                         continue
                     
                     # Expand paste references back to full content
